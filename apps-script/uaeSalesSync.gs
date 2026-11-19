@@ -10,7 +10,7 @@
  * Daily (dailySyncUaeSales):
  *   JPA - SAR_UAE "All LOB's"  -> LOB tabs in the source sheet + jobs_* collections (original JPA
  *                                column names, the shape this dashboard's API reads)
- *   same rows                  -> "SRR - ..." tabs + srr_* collections (Loading/Discharge Country, for Tradelane)
+ *   SRR - SAR_UAE (RPA sheet)  -> "SRR - ..." tabs (copied as they are) + srr_* collections (Tradelane countries)
  *   "UAE Sales Mapping" tab    -> ocean_mapping_sales_targets (pushed for FY26 and FY27)
  *   "UAE Zone Target" tab      -> ocean_mapping_zone_targets (pushed for FY26 and FY27)
  * Salespeople not in the mapping tab are counted under UAES.UNMAPPED_REP ("Nomination Sales"); the
@@ -24,7 +24,10 @@ var UAES = {
   MAPPING_TAB: 'UAE Sales Mapping',
   UNMAPPED_REP: 'Nomination Sales',   // names not in the mapping tab are counted under this rep
   ZONE_TAB: 'UAE Zone Target',
-  SRR_TAB_OF: { srr_sea_export: 'SRR - Sea Export', srr_sea_import: 'SRR - Sea Import', srr_air_export: 'SRR - Air Export', srr_air_import: 'SRR - Air Import' },
+  SRR_ID: '1Gpi6XQqoQjRe3-qIKNQuDBAyoIVkh072b3x9dLVecAE',      // SRR - SAR_UAE (RPA)
+  // SRR - SAR_UAE tab -> [source sheet tab, dashboard collection]. Land Import/Export tabs are not used.
+  SRR_TABS: { 'Sea Export': ['SRR - Sea Export', 'srr_sea_export'], 'Sea Import': ['SRR - Sea Import', 'srr_sea_import'],
+              'Air Export': ['SRR - Air Export', 'srr_air_export'], 'Air Import': ['SRR - Air Import', 'srr_air_import'] },
   CHUNK: 300,
   MIN_SHARE: 0.7,
   TAB_OF_LOB: { 'SEA EXPORT': 'Sea Export', 'SEA IMPORT': 'Sea Import', 'AIR EXPORT': 'Air Export', 'AIR IMPORT': 'Air Import', 'GENERAL': 'General' },
@@ -80,13 +83,18 @@ function uaesParseJobs(rows) {
   return Object.keys(byNo).map(function (k) { return byNo[k]; });
 }
 
-function uaesSrrRows(jobs) {
-  var out = { srr_sea_export: [], srr_sea_import: [], srr_air_export: [], srr_air_import: [] };
-  jobs.forEach(function (j) {
-    var coll = 'srr_' + j['LOB'].toLowerCase().replace(' ', '_');
-    if (!out[coll]) return;
-    if (/EXPORT$/.test(j['LOB'])) out[coll].push({ 'Shipment No': j['Shipment No'], 'Discharge Country': j['Destination Country'] || j['Consignee Country'] || '' });
-    else out[coll].push({ 'Shipment No': j['Shipment No'], 'Loading Country': j['Origin Port Country'] || j['Shipper Country'] || '' });
+/** SRR - SAR_UAE: each report tab has a few title rows, then a header row starting "Shipment No". */
+function uaesReadSrr() {
+  var ss = SpreadsheetApp.openById(UAES.SRR_ID), out = {};
+  Object.keys(UAES.SRR_TABS).forEach(function (t) {
+    var sh = ss.getSheetByName(t), v = sh ? sh.getDataRange().getValues() : [];
+    var hi = -1;
+    for (var i = 0; i < Math.min(v.length, 15); i++) { if (String(v[i][0]).trim() === 'Shipment No') { hi = i; break; } }
+    var headers = hi < 0 ? ['Shipment No'] : v[hi].map(function (h) { return String(h == null ? '' : h).trim(); });
+    var rows = hi < 0 ? [] : v.slice(hi + 1).filter(function (r) { return String(r[0]).trim(); }).map(function (r) {
+      var o = {}; headers.forEach(function (h, k) { if (h) o[h] = r[k] instanceof Date ? uaesFmtDate(r[k]) : r[k]; }); return o;
+    });
+    out[t] = { headers: headers.filter(function (h) { return h; }), rows: rows };
   });
   return out;
 }
@@ -189,12 +197,18 @@ function dailySyncUaeSales(force) {
     }
   });
 
-  var srr = uaesSrrRows(jobs);
-  Object.keys(srr).forEach(function (c) {
-    uaesWriteTab(UAES.SRR_TAB_OF[c], ['Shipment No', /export$/.test(c) ? 'Discharge Country' : 'Loading Country'], srr[c]);
-    uaesPost({ action: 'wipeCollection', collection: c });
-    for (var i = 0; i < srr[c].length; i += UAES.CHUNK) uaesPost({ action: 'srr', collectionName: c, records: srr[c].slice(i, i + UAES.CHUNK) });
-  });
+  var srr = uaesReadSrr(), srrRows = 0;
+  Object.keys(srr).forEach(function (t) { srrRows += srr[t].rows.length; });
+  if (!srrRows) {
+    Logger.log('SRR - SAR_UAE read 0 rows (RPA sheet empty?) - kept the previous SRR data.');
+  } else {
+    Object.keys(UAES.SRR_TABS).forEach(function (t) {
+      var tab = UAES.SRR_TABS[t][0], coll = UAES.SRR_TABS[t][1], rows = srr[t].rows;
+      uaesWriteTab(tab, srr[t].headers, rows);
+      uaesPost({ action: 'wipeCollection', collection: coll });
+      for (var i = 0; i < rows.length; i += UAES.CHUNK) uaesPost({ action: 'srr', collectionName: coll, records: rows.slice(i, i + UAES.CHUNK) });
+    });
+  }
 
   uaesPost({ action: 'wipeCollection', collection: 'ocean_mapping_sales_targets' });
   if (mapping.length) ['FY26', 'FY27'].forEach(function (fy) { uaesPost({ action: 'mapping', collectionName: 'ocean_mapping_sales_targets', records: mapping, fy: fy }); });
@@ -202,8 +216,8 @@ function dailySyncUaeSales(force) {
   if (zones.length) ['FY26', 'FY27'].forEach(function (fy) { uaesPost({ action: 'mapping', collectionName: 'ocean_mapping_zone_targets', records: zones, fy: fy }); });
 
   props.setProperty('UAES_LAST_JOBS', String(jobs.length));
-  Logger.log('UAE Sales sync: %s jobs (%s), %s mapping rows, %s jobs counted under %s in %ss', jobs.length,
-    JSON.stringify(Object.keys(byTab).map(function (t) { return t + ' ' + byTab[t].length; })), mapping.length, fold.folded, UAES.UNMAPPED_REP,
+  Logger.log('UAE Sales sync: %s jobs (%s), %s SRR rows, %s mapping rows, %s jobs counted under %s in %ss', jobs.length,
+    JSON.stringify(Object.keys(byTab).map(function (t) { return t + ' ' + byTab[t].length; })), srrRows, mapping.length, fold.folded, UAES.UNMAPPED_REP,
     Math.round((new Date() - started) / 1000));
 }
 
@@ -215,4 +229,4 @@ function setupUaeSalesTrigger() {
   ScriptApp.newTrigger('dailySyncUaeSales').timeBased().everyDays(1).atHour(10).nearMinute(45).inTimezone('Asia/Kolkata').create();
 }
 
-if (typeof module !== 'undefined') module.exports = { uaesParseJobs: uaesParseJobs, uaesFoldUnmapped: uaesFoldUnmapped, uaesSrrRows: uaesSrrRows, uaesNorm: uaesNorm, UAES: UAES };
+if (typeof module !== 'undefined') module.exports = { uaesParseJobs: uaesParseJobs, uaesFoldUnmapped: uaesFoldUnmapped, uaesReadSrr: uaesReadSrr, uaesNorm: uaesNorm, UAES: UAES };
