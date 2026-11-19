@@ -188,7 +188,7 @@ var SAR_LOGO_URI = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAJ0AAABqCAYAAA
 // Bump this whenever aggregation/data logic changes — invalidates all
 // existing browser caches instantly, even though MongoDB data itself
 // hasn't changed (so the meta-timestamp check alone wouldn't catch it).
-var CACHE_VERSION = 'uae-sales-v1';
+var CACHE_VERSION = 'uae-sales-v2';
 
 // ── Ocean Zone→Region map (from Ocean Mapping sheet) ─────────────────────────
 // Used by Regional Manager RLS to filter reps by region.
@@ -422,7 +422,7 @@ function _showDashboardBody() {
     var nowBoot = new Date();
     var MONBOOT = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
     var curMonBoot = MONBOOT[nowBoot.getMonth()] + '-' + String(nowBoot.getFullYear()).slice(2);
-    var latestKey = 'Apr-26_' + curMonBoot;
+    var latestKey = 'Jan-' + String(nowBoot.getFullYear()).slice(2) + '_' + curMonBoot;
     var ac = lsGet('agents_' + latestKey) || lsGet('agents_' + defKey);
     if (ac && ac.success) { agentData = ac; agentDataReady = true; _agentCache[latestKey] = ac; }
     // Tradelane data is no longer bootstrapped from localStorage — it was
@@ -498,7 +498,8 @@ function _showDashboardBody() {
       var nowBg = new Date();
       var MONBG = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
       var curMonBg = MONBG[nowBg.getMonth()] + '-' + String(nowBg.getFullYear()).slice(2);
-      var from = m26.indexOf('Apr-26') >= 0 ? 'Apr-26' : (m26[0] || '');
+      var _janBg = 'Jan-' + String(nowBg.getFullYear()).slice(2);
+      var from = m26.indexOf(_janBg) >= 0 ? _janBg : (m26[0] || '');
       var to   = m26.indexOf(curMonBg) >= 0 ? curMonBg : (m26[m26.length-1] || '');
       if (!from || !to) return;
       var key = from + '_' + to;
@@ -1820,7 +1821,7 @@ var state = { page:'sales', currency:'USD', reportView:'Monthly', viewDropOpen:f
   filterRepDropOpen: false,
   filterZoneDropOpen: false,
     filterRegionDropOpen: false,
-  filterLobs: ['SEA EXPORT','SEA IMPORT','ISOTANK EXPORT','ISOTANK IMPORT','AIR EXPORT','AIR IMPORT','GENERAL'],   // default Ocean LOBs + Air cross-sales + General; empty = All LOBs
+  filterLobs: ['SEA EXPORT','SEA IMPORT','AIR EXPORT','AIR IMPORT','GENERAL'],   // UAE LOBs (no ISO Tank); empty = All LOBs
   adminSearch: '',        // admin panel user search
   custOpenFilter:  null, // 'name' or 'rep'
   agentOpenFilter:  null, // 'name' or 'rep'
@@ -1899,10 +1900,10 @@ function filteredMonthIndices(){
   // quarterGroups() splits them into per-year columns for the table
   if (v === 'Quarterly') {
     var qMap = {
-      'Q1': ['Apr','May','Jun'],
-      'Q2': ['Jul','Aug','Sep'],
-      'Q3': ['Oct','Nov','Dec'],
-      'Q4': ['Jan','Feb','Mar']
+      'Q1': ['Jan','Feb','Mar'],   // UAE: calendar quarters
+      'Q2': ['Apr','May','Jun'],
+      'Q3': ['Jul','Aug','Sep'],
+      'Q4': ['Oct','Nov','Dec']
     };
     var qMos = qMap[state.selectedQuarter] || [];
     return months26.reduce(function(acc, m, i){
@@ -1915,25 +1916,8 @@ function filteredMonthIndices(){
   // Yearly: Financial (Apr-Mar) = all months, Calendar (Jan-Dec) = filter by Jan-Dec months
   if (v === 'Yearly') {
     if (state.yearType === 'Calendar') {
-      // Calendar year = exclude Apr-Dec of the first FY year (Apr-25 to Dec-25 excluded,
-      // only keep Jan-Mar of each year grouping i.e. Jan-26, Feb-26, Mar-26 etc.)
-      // More accurately: keep months whose prefix is Jan-Dec (all months) but
-      // grouped into Jan-Dec calendar year. Since data spans Apr-25→Dec-26,
-      // Calendar Year = Jan-26 onwards (Jan-26 to Dec-26).
-      return months26.reduce(function(acc, m, i){
-        // Calendar year: include only months from Jan-XX onwards (skip Apr-Dec of first year)
-        var m3 = mo(m);
-        var y2 = yr(m);
-        // Keep if it belongs to a full calendar year range present in data
-        // Simple rule: include Jan-26 through Dec-26 (year "26")
-        var calYears = {};
-        months26.forEach(function(ml){
-          var y = yr(ml); var month = mo(ml);
-          if (month === 'Jan') calYears[y] = true;
-        });
-        if (calYears[y2]) acc.push(i);
-        return acc;
-      }, []);
+      // UAE: every month, grouped into Jan-Dec years by yearGroups() (2025 is partial: data starts Apr-25)
+      return months26.map(function(_,i){ return i; });
     } else {
       // Financial Year (Apr-Mar) — all available months
       return months26.map(function(_,i){ return i; });
@@ -2126,7 +2110,7 @@ function yearGroups(){
 // quarterGroups() — returns one column per year that has data for the selected quarter
 // No FY filter — shows ALL available years side by side
 function quarterGroups(){
-  var qMap = { 'Q1':['Apr','May','Jun'], 'Q2':['Jul','Aug','Sep'], 'Q3':['Oct','Nov','Dec'], 'Q4':['Jan','Feb','Mar'] };
+  var qMap = { 'Q1':['Jan','Feb','Mar'], 'Q2':['Apr','May','Jun'], 'Q3':['Jul','Aug','Sep'], 'Q4':['Oct','Nov','Dec'] };
   var qMos = qMap[state.selectedQuarter] || [];
 
   // Collect all unique year suffixes present in months26 that have these quarter months
@@ -2187,11 +2171,12 @@ function entityWeekArrays(r, metric){
 // Call this whenever months26 changes (API load, cache load).
 function syncDateRangeToData(){
   if (!months26 || months26.length === 0) return;
-  // FROM: April of current FY (Apr-26). TO: current month based on today's date.
+  // FROM: January of the current year (UAE reports run Jan-Dec). TO: current month based on today's date.
   var now = new Date();
   var MON = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
   var curMonLabel = MON[now.getMonth()] + '-' + String(now.getFullYear()).slice(2); // e.g. "Jul-26"
-  var defaultFrom = months26.indexOf('Apr-26') >= 0 ? 'Apr-26' : months26[0];
+  var _janLabel = 'Jan-' + String(now.getFullYear()).slice(2);
+  var defaultFrom = months26.indexOf(_janLabel) >= 0 ? _janLabel : months26[0];
   // TO = current month if available, else last available month
   var defaultTo = months26.indexOf(curMonLabel) >= 0 ? curMonLabel : months26[months26.length - 1];
   state.dateFrom = defaultFrom;
@@ -3044,7 +3029,7 @@ function topbar(){
           var qyrPill = ''; // FY year filter removed — all years shown side by side
           // Quarter pill
           var qOpen = state.quarterDropOpen;
-          var qLabels = {'Q1':'Q1  Apr–Jun','Q2':'Q2  Jul–Sep','Q3':'Q3  Oct–Dec','Q4':'Q4  Jan–Mar'};
+          var qLabels = {'Q1':'Q1  Jan–Mar','Q2':'Q2  Apr–Jun','Q3':'Q3  Jul–Sep','Q4':'Q4  Oct–Dec'};
           var qPill = '<div style="position:relative;display:inline-block;flex-shrink:0;">'
             +'<div data-act="toggleQuarterDrop" style="display:flex;align-items:center;gap:6px;background:#FFFFFF;border-radius:999px;padding:8px 14px;font-size:12px;font-weight:700;color:#0D2B5E;cursor:pointer;user-select:none;white-space:nowrap;border:'+pillBorder+';box-shadow:'+ps+';'+(qOpen?'box-shadow:0 0 0 2px #1D5FCC40,'+ps+';':'')+'">'
               +'<span style="pointer-events:none;">'+qLabels[state.selectedQuarter]+'</span>'
@@ -3118,7 +3103,7 @@ function topbar(){
         if (isFOpen) {
           var _isPendencyPage = state.page === 'op' || state.page === 'finance';
           var _isSalesPage = state.page === 'sales' || state.page === 'home' || !state.page;
-          var LOB_KEYS = ['SEA EXPORT','SEA IMPORT','ISOTANK EXPORT','ISOTANK IMPORT','AIR EXPORT','AIR IMPORT','GENERAL'];
+          var LOB_KEYS = ['SEA EXPORT','SEA IMPORT','AIR EXPORT','AIR IMPORT','GENERAL'];   // UAE: no ISO Tank
           var LOB_LABELS = {'SEA EXPORT':'Sea Export','SEA IMPORT':'Sea Import','ISOTANK EXPORT':'ISO Tank Export','ISOTANK IMPORT':'ISO Tank Import','AIR EXPORT':'Air Export','AIR IMPORT':'Air Import','GENERAL':'General'};
           // Always list from the FULL unfiltered dataset — otherwise once you filter
           // down to a subset, you could never see/re-select the excluded reps again
@@ -3227,7 +3212,7 @@ if (window._zoneRegionMap) {
   Object.values(window._zoneRegionMap).forEach(function(r){ if(r) _regSet[r]=true; });
   _allRegions = Object.keys(_regSet).sort();
 }
-_allRegions.push('Cross Sales'); // special bucket for reps with no zone mapping
+if ((repsRawOriginal||[]).some(function(r){ return r.zone === 'Cross Sales'; })) _allRegions.push('Cross Sales'); // only when unmapped reps exist (UAE folds them into Nomination Sales)
 // Regional Manager only sees the region(s) actually assigned to them — a
 // single-region manager sees just that one, a multi-region manager sees
 // only their own set, never every region company-wide.
@@ -3543,7 +3528,7 @@ function customerPage(){
   var fmtPct  = function(v){ return v+'%'; };
   var fmtTons = function(v){ return v >= 1000 ? (v/1000).toFixed(1)+'k T' : v.toFixed(1)+' T'; };
   var fmtTEU  = function(v){ return v.toFixed(2)+' TEU'; };
-  var LOBS = ['Air','Ocean','ISO Tank'];
+  var LOBS = ['Air','Ocean'];   // UAE has no ISO Tank business
   var LOB_COLORS = {'Air':'#1D5FCC','Ocean':'#0891B2','ISO Tank':'#7C3AED'};
   var LOB_SUBTITLES = {'Air':'Air Export + Air Import','Ocean':'Sea Export + Sea Import','ISO Tank':'ISO Tank Export + Import'};
 
@@ -3978,7 +3963,7 @@ function agentPage(){
   var fmtPct  = function(v){ return v+'%'; };
   var fmtTons = function(v){ return v >= 1000 ? (v/1000).toFixed(1)+'k T' : v.toFixed(1)+' T'; };
   var fmtTEU  = function(v){ return v.toFixed(2)+' TEU'; };
-  var LOBS = ['Air','Ocean','ISO Tank'];
+  var LOBS = ['Air','Ocean'];   // UAE has no ISO Tank business
   var LOB_COLORS = {'Air':'#1D5FCC','Ocean':'#0891B2','ISO Tank':'#7C3AED'};
   var LOB_SUBTITLES = {'Air':'Air Export + Air Import','Ocean':'Sea Export + Sea Import','ISO Tank':'ISO Tank Export + Import'};
 
@@ -4420,7 +4405,7 @@ function tradelanePage(){
   var fmtPct  = function(v){ return v+'%'; };
   var fmtTons = function(v){ return v >= 1000 ? (v/1000).toFixed(1)+'k T' : v.toFixed(1)+' T'; };
   var fmtTEU  = function(v){ return v.toFixed(2)+' TEU'; };
-  var LOBS = ['Air','Ocean','ISO Tank'];
+  var LOBS = ['Air','Ocean'];   // UAE has no ISO Tank business
   var LOB_COLORS = {'Air':'#1D5FCC','Ocean':'#0891B2','ISO Tank':'#7C3AED'};
   var LOB_SUBTITLES = {'Air':'Air Export + Air Import','Ocean':'Sea Export + Sea Import','ISO Tank':'ISO Tank Export + Import'};
 
@@ -5062,9 +5047,9 @@ function pendencyPage(data, title, pendingLabel, doneLabel, brandColor, showJobO
   // Quarterly: build two summary columns — prev year Q and current year Q
   var _qGroups = null; // [{label, months:[...month labels]}, ...]
   if (isQuarterly) {
-    var _qMap = { 'Q1':['Apr','May','Jun'], 'Q2':['Jul','Aug','Sep'], 'Q3':['Oct','Nov','Dec'], 'Q4':['Jan','Feb','Mar'] };
+    var _qMap = { 'Q1':['Jan','Feb','Mar'], 'Q2':['Apr','May','Jun'], 'Q3':['Jul','Aug','Sep'], 'Q4':['Oct','Nov','Dec'] };
     var _qMos = _qMap[state.selectedQuarter] || [];
-    var _qRangeNames = {'Q1':'Apr–Jun','Q2':'Jul–Sep','Q3':'Oct–Dec','Q4':'Jan–Mar'};
+    var _qRangeNames = {'Q1':'Jan–Mar','Q2':'Apr–Jun','Q3':'Jul–Sep','Q4':'Oct–Dec'};
     // Find all year suffixes in months26 that have data for this quarter
     var _yearGroups = {};
     months26.forEach(function(m){
